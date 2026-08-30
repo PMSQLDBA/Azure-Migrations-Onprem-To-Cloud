@@ -1,4 +1,4 @@
-Consolidated cheatsheet based on the migration options, target-selection criteria, and scenarios in your document. 
+Consolidated cheatsheet based on the migration options, target-selection criteria, and scenarios:
 
 # On-Prem SQL Server → Azure Migration CHEATSHEET
 
