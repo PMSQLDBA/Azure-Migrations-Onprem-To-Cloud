@@ -1,65 +1,281 @@
-# Azure-Migrations-Onprem-To-Cloud
+### 1. Migration Strategy Overview
 
-Below is a practical architecture-level view of the main **on-premises SQL Server → Azure migration options** and when each one fits. 
+Start by defining the three architecture choices:
 
-Microsoft currently supports migration paths to **Azure SQL Database, Azure SQL Managed Instance, and SQL Server on Azure VM**, with different tooling and downtime profiles. ([Microsoft Learn][1])
+| S.No. | Migration Strategy         | Azure Target               | Primary Goal                                        | Typical Scenario                        |
+| ----: | -------------------------- | -------------------------- | --------------------------------------------------- | --------------------------------------- |
+|     1 | **Rehost**                 | SQL Server on Azure VM     | Move with minimum change                            | Legacy / tightly coupled SQL workloads  |
+|     2 | **Managed Lift-and-Shift** | Azure SQL Managed Instance | Move to PaaS while retaining high SQL compatibility | Existing enterprise SQL applications    |
+|     3 | **Modernize / Refactor**   | Azure SQL Database         | Maximum PaaS benefits                               | Cloud-native or modernized applications |
 
-| Source                               | Azure Target                   | Migration Method                                     | Online / Offline                       | Typical Downtime   | Best Fit / Use Case                                        | Key Notes                                                                                                                                                             |
-| ------------------------------------ | ------------------------------ | ---------------------------------------------------- | -------------------------------------- | ------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| On-prem SQL Server                   | **Azure SQL Database**         | Azure Database Migration Service (DMS)               | Offline                                | Medium to High     | Modernizing a standalone application database to PaaS      | Current DMS support for SQL Database is offline; application downtime begins when migration starts. Instance-level features may need redesign. ([Microsoft Learn][2]) |
-| On-prem SQL Server                   | **Azure SQL Database**         | Schema + data migration using SSMS / migration tools | Offline                                | Medium             | Small/medium databases, dev/test, controlled migrations    | Good when you can remediate unsupported SQL Server features before migration.                                                                                         |
-| On-prem SQL Server                   | **Azure SQL Database**         | BACPAC export/import                                 | Offline                                | High for large DBs | Small databases, dev/test, logical migration               | Not preferred for large production databases or minimal-downtime migrations.                                                                                          |
-| On-prem SQL Server                   | **Azure SQL Database**         | Transactional replication / custom sync pattern      | Online-ish                             | Low                | Specialized cases requiring phased migration               | More complex operationally; requires careful application and consistency design.                                                                                      |
-| On-prem SQL Server                   | **Azure SQL Managed Instance** | Native `.bak` backup + `RESTORE FROM URL`            | Offline                                | Medium to High     | Straightforward lift-and-shift when downtime is acceptable | One of the simplest MI migration methods. Backup is uploaded to Azure Blob Storage and restored directly to MI. ([Microsoft Learn][1])                                |
-| On-prem SQL Server                   | **Azure SQL Managed Instance** | Azure Database Migration Service                     | Online / Offline depending on scenario | Low to Medium      | Enterprise-managed migration                               | Good for guided migration and centralized monitoring.                                                                                                                 |
-| On-prem SQL Server                   | **Azure SQL Managed Instance** | Log Replay Service (LRS)                             | Online / Near-online                   | Low                | Large databases and minimal-downtime migrations            | Uses full/differential/log backups and continuously replays them to MI until cutover. ([Microsoft Learn][1])                                                          |
-| On-prem SQL Server                   | **Azure SQL Managed Instance** | Managed Instance Link                                | Online                                 | Very Low           | Mission-critical systems needing near-zero downtime        | Uses near-real-time replication and allows controlled cutover. Strong choice when supported by source/version requirements. ([Microsoft Learn][1])                    |
-| Azure Arc-enabled on-prem SQL Server | **Azure SQL Managed Instance** | Azure Arc integrated migration                       | Online / Minimal downtime              | Low                | Large estates already using Azure Arc                      | Azure portal can assess readiness and orchestrate MI Link or LRS-based migration. ([Microsoft Learn][1])                                                              |
-| On-prem SQL Server                   | **SQL Server on Azure VM**     | Backup and Restore                                   | Offline                                | Medium to High     | Pure lift-and-shift with minimal application changes       | Highest compatibility because destination is still full SQL Server. ([Microsoft Learn][3])                                                                            |
-| On-prem SQL Server                   | **SQL Server on Azure VM**     | Azure DMS Online Migration                           | Online                                 | Low                | Production workloads requiring minimal downtime            | DMS restores backup chain and completes cutover after final log synchronization. ([Microsoft Learn][4])                                                               |
-| On-prem SQL Server                   | **SQL Server on Azure VM**     | Azure DMS Offline Migration                          | Offline                                | Medium             | Simpler managed migration with downtime allowed            | Useful when you want DMS orchestration without online synchronization. ([Microsoft Learn][5])                                                                         |
-| On-prem SQL Server                   | **SQL Server on Azure VM**     | Always On / Distributed AG                           | Online                                 | Very Low           | Large, highly critical SQL Server workloads                | More complex but useful when HA and very low downtime are required.                                                                                                   |
-| On-prem SQL Server VM                | **Azure VM**                   | Azure Migrate server migration                       | Offline / Replicated VM migration      | Low to Medium      | Moving the entire SQL Server VM, not only databases        | Appropriate when OS configuration, SQL instance, local files, agents, and applications need to move together.                                                         |
-| On-prem SQL Server                   | **Azure SQL MI / VM**          | Log Shipping                                         | Online-ish                             | Low                | Traditional DBA-controlled migration                       | Good when existing operational knowledge and backup/log shipping processes are already mature.                                                                        |
+This matches the high-level classification already captured in your document. 
 
-### Which target should you choose?
+---
 
-| Requirement                          |          Azure SQL Database | Azure SQL Managed Instance |         SQL Server on Azure VM |
-| ------------------------------------ | --------------------------: | -------------------------: | -----------------------------: |
-| Maximum PaaS benefits                |                    **Best** |                  Very Good |                            Low |
-| Native `.bak` restore                |                          No |                    **Yes** |                        **Yes** |
-| SQL Server Agent                     |   Limited / redesign needed |                    **Yes** |                        **Yes** |
-| Cross-database queries               |                     Limited |         **Strong support** |               **Full support** |
-| Linked servers                       |                     Limited | Supported with limitations | **Full SQL Server capability** |
-| OS access                            |                          No |                         No |                        **Yes** |
-| SQL instance-level control           |                         Low |                       High |                       **Full** |
-| Minimal application changes          |         Sometimes difficult |           **Usually good** |                       **Best** |
-| Platform modernization               |                    **Best** |                       Good |                            Low |
-| Lowest administration effort         |                    **Best** |                  Very Good |                        Highest |
-| Near-zero downtime migration options | Limited depending on method |          **MI Link / LRS** |                   **DMS / AG** |
-| Existing `.bak` migration            |                  Not direct |          **Excellent fit** |              **Excellent fit** |
+### 2. Target Selection
 
-### Common real-world cases
+Next answer **“Where should the database move?”**
 
-| Case                                                                                               | Recommended Target                   | Preferred Migration Method          | Why                                                     |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------- | ------------------------------------------------------- |
-| Small standalone application DB with no SQL Agent or instance dependencies                         | Azure SQL Database                   | DMS offline                         | Maximum PaaS benefit                                    |
-| Old application heavily using SQL Agent, cross-database queries and instance features              | Azure SQL MI                         | Native restore / LRS                | High SQL Server compatibility without VM management     |
-| Legacy application that cannot be modified                                                         | Azure VM                             | Backup/restore or DMS               | Full SQL Server compatibility                           |
-| 5-TB production DB with only 10–15 minutes downtime available                                      | Azure SQL MI                         | **Managed Instance Link or LRS**    | Keeps target synchronized before cutover                |
-| 500-GB database with a 6-hour maintenance window                                                   | Azure SQL MI                         | Native backup + restore             | Simple and cost-effective                               |
-| Hundreds of SQL Servers requiring inventory and target recommendations                             | Azure Migrate + Azure Arc assessment | Target-specific migration afterward | Centralized discovery, sizing and migration planning    |
-| Entire SQL Server VM including SQL Agent, SSIS packages, file shares and OS dependencies must move | Azure VM                             | Azure Migrate / VM migration        | Moves the complete server environment                   |
-| Application being redesigned to cloud-native architecture                                          | Azure SQL Database                   | Schema/data migration               | Removes instance-level SQL dependencies                 |
-| Production system using many linked servers and CLR components                                     | Azure VM or MI after assessment      | DMS / native migration              | SQL Database would usually require significant redesign |
-| Need near-zero downtime and source supports MI Link                                                | Azure SQL MI                         | **Managed Instance Link**           | Near-real-time replication and controlled cutover       |
-| Need near-zero downtime but prefer backup/log-based process                                        | Azure SQL MI                         | **LRS**                             | Continuous backup replay until final cutover            |
-| Development/Test database refresh                                                                  | Azure SQL MI                         | Native `.bak` restore               | Simple operational process                              |
-| Disaster-recovery style migration                                                                  | Azure SQL MI / Azure VM              | Backup chain, LRS or AG             | Better control of recovery and cutover                  |
+| S.No. | Requirement                                               | Recommended Target             |
+| ----: | --------------------------------------------------------- | ------------------------------ |
+|     1 | Cloud-native/new application                              | **Azure SQL Database**         |
+|     2 | Maximum PaaS benefits                                     | **Azure SQL Database**         |
+|     3 | Minimum database administration                           | **Azure SQL Database**         |
+|     4 | Existing SQL Server workload requiring high compatibility | **Azure SQL Managed Instance** |
+|     5 | Native `.bak` restore required without managing SQL VMs   | **Azure SQL Managed Instance** |
+|     6 | SQL Agent and cross-database functionality required       | **Azure SQL Managed Instance** |
+|     7 | SQL instance features needed but OS access isn't required | **Azure SQL Managed Instance** |
+|     8 | Application cannot easily be changed                      | **SQL Server on Azure VM**     |
+|     9 | Windows/OS access required                                | **SQL Server on Azure VM**     |
+|    10 | Full SQL Server instance control required                 | **SQL Server on Azure VM**     |
+|    11 | Third-party SQL/Windows agents required                   | **SQL Server on Azure VM**     |
+|    12 | Entire existing SQL Server VM must move                   | **SQL Server on Azure VM**     |
 
-### Migration decision flow
+Your existing decision table already identifies these distinctions, including native backup restore, SQL Agent, cross-database queries, OS access and instance control. 
+
+---
+
+### 3. Target Capability Comparison
+
+After identifying the targets, provide the detailed comparison.
+
+| S.No. | Capability                | Azure SQL Database                | Azure SQL Managed Instance | SQL Server on Azure VM    |
+| ----: | ------------------------- | --------------------------------- | -------------------------- | ------------------------- |
+|     1 | Service Model             | PaaS                              | PaaS                       | IaaS                      |
+|     2 | SQL compatibility         | Moderate                          | **High**                   | **Highest**               |
+|     3 | Native `.bak` restore     | No                                | **Yes**                    | **Yes**                   |
+|     4 | SQL Server Agent          | Alternative required              | **Yes**                    | **Yes**                   |
+|     5 | Cross-database workloads  | Limited / redesign                | **Strong**                 | **Full**                  |
+|     6 | Linked servers            | Limited                           | Supported with limitations | **Full**                  |
+|     7 | OS access                 | No                                | No                         | **Yes**                   |
+|     8 | Full instance control     | No                                | Managed/Partial            | **Yes**                   |
+|     9 | Infrastructure management | Microsoft                         | Microsoft                  | Customer                  |
+|    10 | Database engine patching  | Microsoft                         | Microsoft                  | Customer / Azure-assisted |
+|    11 | Built-in platform HA      | **Yes**                           | **Yes**                    | Must be architected       |
+|    12 | Serverless option         | **Yes, supported configurations** | No                         | No                        |
+|    13 | Elastic Pool              | **Yes**                           | No                         | No                        |
+|    14 | Application changes       | Potentially significant           | Usually lower              | **Lowest**                |
+|    15 | Modernization potential   | **Highest**                       | High                       | Low                       |
+|    16 | Management overhead       | **Lowest**                        | Low                        | **Highest**               |
+|    17 | Customization             | Low                               | Medium                     | **Highest**               |
+|    18 | Best migration strategy   | Modernize                         | Managed Lift-and-Shift     | Rehost                    |
+
+---
+
+# 4. Migration Methods — Segregate by Target
+
+This is where your existing 15 migration methods should be reorganized. Currently they appear in one table. 
+
+## 4.1 On-Prem SQL Server → Azure SQL Database
+
+| S.No. | Migration Method                         | Mode       | Downtime           | Best Use Case                      |
+| ----: | ---------------------------------------- | ---------- | ------------------ | ---------------------------------- |
+|     1 | Azure Database Migration Service         | Offline    | Medium–High        | Enterprise database modernization  |
+|     2 | Schema + Data Migration                  | Offline    | Medium             | Small/medium controlled migrations |
+|     3 | BACPAC Export/Import                     | Offline    | High for large DBs | Small DB / Dev/Test                |
+|     4 | Transactional Replication / Sync pattern | Online-ish | Low                | Specialized phased migration       |
+
+**Recommended when:** application/database can be modernized and SQL Server instance dependencies can be removed.
+
+---
+
+## 4.2 On-Prem SQL Server → Azure SQL Managed Instance
+
+| S.No. | Migration Method                                          | Mode                                             | Downtime     | Best Use Case                            |
+| ----: | --------------------------------------------------------- | ------------------------------------------------ | ------------ | ---------------------------------------- |
+|     1 | Native `.bak` + Restore from URL                          | Offline                                          | Medium–High  | Simple migration with maintenance window |
+|     2 | Azure DMS                                                 | Online / Offline depending on supported scenario | Low–Medium   | Managed enterprise migration             |
+|     3 | Log Replay Service (LRS)                                  | Near-online                                      | **Low**      | Large DB / minimal downtime              |
+|     4 | Managed Instance Link                                     | Online                                           | **Very Low** | Mission-critical / near-zero downtime    |
+|     5 | Azure Arc Integrated Migration                            | Online / Minimal downtime                        | Low          | Large Azure Arc-enabled SQL estates      |
+|     6 | Log Shipping / backup-log based approach where applicable | Near-online                                      | Low          | DBA-controlled migration                 |
+
+Your source correctly highlights native restore as the simpler option when downtime is acceptable and MI Link/LRS for lower-downtime migrations. 
+
+---
+
+## 4.3 On-Prem SQL Server → SQL Server on Azure VM
+
+| S.No. | Migration Method           | Mode           | Downtime     | Best Use Case                         |
+| ----: | -------------------------- | -------------- | ------------ | ------------------------------------- |
+|     1 | Native Backup & Restore    | Offline        | Medium–High  | Simple database lift-and-shift        |
+|     2 | Azure DMS Online           | Online         | **Low**      | Production minimal-downtime migration |
+|     3 | Azure DMS Offline          | Offline        | Medium       | Managed migration with downtime       |
+|     4 | Always On / Distributed AG | Online         | **Very Low** | Mission-critical workloads            |
+|     5 | Azure Migrate              | VM Replication | Low–Medium   | Move entire SQL Server VM             |
+|     6 | Log Shipping               | Near-online    | Low          | Traditional DBA-controlled migration  |
+
+---
+
+# 5. Select Migration Method Based on Downtime
+
+Once the target is selected, **downtime should drive the migration method**.
+
+| S.No. | Downtime Requirement | SQL Database                      | SQL Managed Instance  | SQL Server Azure VM           |
+| ----: | -------------------- | --------------------------------- | --------------------- | ----------------------------- |
+|     1 | Downtime acceptable  | DMS Offline / Schema+Data         | Native Backup/Restore | Backup/Restore                |
+|     2 | Moderate downtime    | DMS / controlled migration        | DMS / LRS             | DMS Offline                   |
+|     3 | Minimal downtime     | Specialized approach              | **LRS**               | **DMS Online / Log Shipping** |
+|     4 | Near-zero downtime   | Requires scenario-specific design | **MI Link**           | **AG / Distributed AG**       |
+
+This is important because **target selection and migration-method selection are two separate decisions**.
+
+---
+
+# 6. Select Based on Database Size
+
+Then consider database size.
+
+| S.No. | Database Size | Typical Approach                                          |
+| ----: | ------------- | --------------------------------------------------------- |
+|     1 | < 100 GB      | Most migration methods are practical                      |
+|     2 | 100–500 GB    | DMS / Native Restore / controlled migration               |
+|     3 | 500 GB–1 TB   | Native Restore, DMS, LRS depending on downtime            |
+|     4 | 1–5 TB        | LRS / MI Link / DMS / optimized backup strategy           |
+|     5 | > 5 TB        | Detailed architecture and performance assessment required |
+
+These should be treated as **planning guidance rather than Azure service limits**. Actual migration time depends on network bandwidth, backup compression, storage throughput, workload, service tier, and migration technology.
+
+---
+
+# 7. Real-World Migration Scenarios
+
+Now put your use cases **after** the architecture and method selection.
+
+| S.No. | Scenario                               | Target       | Method                                       |
+| ----: | -------------------------------------- | ------------ | -------------------------------------------- |
+|     1 | Small standalone application           | Azure SQL DB | DMS / Schema+Data                            |
+|     2 | Cloud-native application               | Azure SQL DB | Schema+Data                                  |
+|     3 | Legacy app using SQL Agent             | Azure SQL MI | Native Restore / LRS                         |
+|     4 | Cross-database enterprise application  | Azure SQL MI | DMS / LRS                                    |
+|     5 | 500-GB DB + 6-hour window              | Azure SQL MI | Native `.bak` Restore                        |
+|     6 | 5-TB DB + 15-minute window             | Azure SQL MI | MI Link / LRS                                |
+|     7 | Near-zero downtime                     | Azure SQL MI | MI Link                                      |
+|     8 | Very large DB + minimal downtime       | Azure SQL MI | LRS / MI Link                                |
+|     9 | Application cannot be changed          | Azure SQL VM | Backup/Restore / DMS                         |
+|    10 | Full OS access required                | Azure SQL VM | DMS / Azure Migrate                          |
+|    11 | Entire existing VM must move           | Azure SQL VM | Azure Migrate                                |
+|    12 | Complex CLR / third-party dependencies | Azure SQL VM | DMS / Azure Migrate                          |
+|    13 | Dev/Test DB refresh                    | Azure SQL MI | Native `.bak` Restore                        |
+|    14 | Large SQL estate                       | DB / MI / VM | Azure assessment → target-specific migration |
+|    15 | DR-style migration                     | MI / VM      | LRS / AG / Backup Chain                      |
+
+This reorganizes the scenarios you already have rather than mixing them into target selection. 
+
+---
+
+# 8. Final Sequential Decision Flow
+
+The document should finish with one clear decision process:
 
 ```text
+1. DISCOVER
+   │
+   ├── SQL Servers
+   ├── Databases
+   ├── Versions / Editions
+   ├── Database Sizes
+   └── Application Dependencies
+   │
+   ▼
+2. ASSESS
+   │
+   ├── SQL Agent
+   ├── Linked Servers
+   ├── Cross-Database Dependencies
+   ├── CLR / SSIS / OS Dependencies
+   └── Compatibility
+   │
+   ▼
+3. SELECT MIGRATION STRATEGY
+   │
+   ├── Rehost
+   ├── Managed Lift-and-Shift
+   └── Modernize
+   │
+   ▼
+4. SELECT AZURE TARGET
+   │
+   ├── Azure SQL Database
+   │      └── Modernize
+   │
+   ├── Azure SQL Managed Instance
+   │      └── Managed Lift-and-Shift
+   │
+   └── SQL Server on Azure VM
+          └── Rehost
+   │
+   ▼
+5. DETERMINE DOWNTIME REQUIREMENT
+   │
+   ├── Offline
+   ├── Minimal Downtime
+   └── Near-Zero Downtime
+   │
+   ▼
+6. SELECT MIGRATION METHOD
+   │
+   ├── DMS
+   ├── Native Backup / Restore
+   ├── LRS
+   ├── MI Link
+   ├── Azure Migrate
+   ├── Log Shipping
+   └── AG / Distributed AG
+   │
+   ▼
+7. DESIGN TARGET
+   │
+   ├── Compute / SKU
+   ├── Storage
+   ├── Networking
+   ├── Private Connectivity
+   ├── Authentication
+   ├── HA / DR
+   └── Security
+   │
+   ▼
+8. TEST MIGRATION
+   │
+   ├── Measure Migration Time
+   ├── Validate Data
+   ├── Validate Application
+   └── Test Rollback
+   │
+   ▼
+9. PRODUCTION MIGRATION
+   │
+   ├── Stop / Control Writes
+   ├── Final Synchronization
+   ├── Cutover
+   └── Connection Change
+   │
+   ▼
+10. VALIDATE
+    │
+    ├── Database
+    ├── Application
+    ├── Performance
+    ├── Security
+    └── Business Validation
+    │
+    ▼
+11. STABILIZE
+    │
+    ├── Monitor
+    ├── Performance Tune
+    └── Resolve Issues
+    │
+    ▼
+12. DECOMMISSION SOURCE
+```
+
+### Recommended document order
+
+**1. Overview → 2. Migration Strategies → 3. Target Selection → 4. Target Capability Comparison → 5. Migration Methods by Target → 6. Downtime-Based Selection → 7. Database Size Considerations → 8. Real-World Scenarios → 9. Migration Decision Flow → 10. Assessment → 11. Target Design → 12. Test Migration → 13. Production Cutover → 14. Validation → 15. Rollback → 16. Stabilization → 17. Source Decommissioning.**
+
+Migration decision flow
+
                         On-Prem SQL Server
                                 │
                                 ▼
@@ -89,24 +305,3 @@ Microsoft currently supports migration paths to **Azure SQL Database, Azure SQL 
                        ▼                  ▼
                Native Backup       MI Link / LRS
                   Restore
-```
-
-For **Azure SQL Managed Instance specifically**, Microsoft currently lists native backup/restore, Log Replay Service, Managed Instance Link, Azure DMS, and Azure Arc-integrated migration among the main migration approaches. Native `.bak` restore is the simplest when downtime is acceptable; MI Link and LRS are stronger options when downtime must be minimized. ([Microsoft Learn][1])
-
-One current limitation worth noting: 
-
-for **SQL Server → Azure SQL Database**, Microsoft’s DMS documentation currently describes the migration as **offline**, while DMS supports online/minimal-downtime scenarios for targets such as SQL Server on Azure VM. ([Microsoft Learn][2])
-
-For an enterprise design document, I would normally classify the options into **Rehost → Refactor → Modernize**:
-
-**Rehost:** SQL Server on Azure VM
-**Managed lift-and-shift:** Azure SQL Managed Instance
-**Modernize:** Azure SQL Database
-
-That classification usually makes the architecture decision much easier for application teams.
-
-[1]: https://learn.microsoft.com/en-us/data-migration/sql-server/managed-instance/guide "SQL Server to Azure SQL Managed Instance: Migration Guide | Microsoft Learn"
-[2]: https://learn.microsoft.com/en-us/azure/dms/tutorial-sql-server-azure-sql-database-offline-ads "Tutorial: Migrate SQL Server to Azure SQL Database (Offline) - Azure Database Migration Service | Microsoft Learn"
-[3]: https://learn.microsoft.com/en-us/data-migration/sql-server/virtual-machines/guide "SQL Server to SQL Server on Azure Virtual Machines: Migration Guide - SQL Server on Azure VMs | Microsoft Learn"
-[4]: https://learn.microsoft.com/en-us/data-migration/sql-server/virtual-machines/database-migration-service-online "Tutorial: Migrate SQL Server to SQL Server on an Azure Virtual Machine with Azure DMS (Online) - Azure Database Migration Service | Microsoft Learn"
-[5]: https://learn.microsoft.com/en-us/data-migration/sql-server/virtual-machines/database-migration-service-offline "Tutorial: Migrate SQL Server to SQL Server on an Azure Virtual Machine with Azure DMS (Offline) - Azure Database Migration Service | Microsoft Learn"
